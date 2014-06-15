@@ -63,39 +63,77 @@ local function Parameter(tbl)
       if self.enabled ~= false then
          old_Parameter.send_midi(self)
       end
+      -- Work-around for a bug in Guru
+      self.value = self.patch_document_variable.value
+   end
+
+   p.to_notify = {}
+
+   p.refresh = function (self)
+      for i, id in ipairs(self.to_notify) do
+         local p = self.synth_definition.parameters[id]
+         local params = {}
+         for i, v in ipairs(p.notify_visibility) do
+            table.insert(params, self.synth_definition.parameters[v])
+         end
+         local old = p.enabled
+         p.enabled = p.visibility(unpack(params))
+         p.ui.visible = p.enabled
+         p.group.ui.height = self.synth_definition.content_height
+         self.synth_definition.dialog_content.height = self.synth_definition.orig_height
+         if old ~= p.enabled then
+            if p.enabled and not self.synth_definition.is_loading then
+               p:send_midi()
+            end
+         end
+      end
+   end
+
+   p.set_value = function (self, value)
+      print("set_value", self.id)
+      local ret = old_Parameter.set_value(self, value)
+      self:refresh()
+      return ret
+   end
+
+   p.ui_set_value = function (self, value)
+      local ret = old_Parameter.ui_set_value(self, value)
+      self:refresh()
+      return ret
+   end
+
+   p.vf_set_value = function (self, value)
+      local ret = old_Parameter.vf_set_value(self, value)
+      self:refresh()
+      return ret
    end
 
    p.create_ui = function (self)
       local ret = old_Parameter.create_ui(self)
       self.ui = ret
-      if tbl.notify_visibility ~= nil and tbl.visibility ~= nil then
-         
-         local function callback()
-            local params = {}
-            for i, v in ipairs(tbl.notify_visibility) do
-               self.synth_definition.parameters[v].value = self.synth_definition.patch_document[v].value
-               table.insert(params, self.synth_definition.parameters[v])
-            end
-            self.enabled = tbl.visibility(unpack(params))
-            for i, v in ipairs(tbl.notify_visibility) do
-               self.synth_definition.parameters[v].value = nil
-            end
-            self.ui.visible = self.enabled
-            self.group.ui.height = self.synth_definition.content_height
-            self.synth_definition.dialog_content.height = self.synth_definition.orig_height
-         end
-         for i, v in ipairs(tbl.notify_visibility) do
-            if p.synth_definition.patch_document[v] == nil then
-               print(("Wrong id '%s'"):format(v))
-            end
-            p.synth_definition.patch_document[v]:add_notifier(callback)
-         end
-
-         self.enabled = false
-         ret.visible = false
-      end
+      ret.visible = self.enabled
       return ret
    end
+
+   p.initialize = function (self, ...)
+      old_Parameter.initialize(self, ...)
+
+      if self.notify_visibility ~= nil and self.visibility ~= nil then
+         for i, v in ipairs(self.notify_visibility) do
+            if self.synth_definition.parameters[v] == nil then
+               print(("Wrong id '%s'"):format(v))
+            end
+            table.insert(self.synth_definition.parameters[v].to_notify, self.id)
+         end
+         self.enabled = false
+      else
+         self.enabled = true
+      end
+   end
+
+
+   p.notify_visibility = tbl.notify_visibility
+   p.visibility = tbl.visibility
 
    p.require_large_group = tbl.notify_visibility ~= nil and tbl.visibility ~= nil
    return p
@@ -177,6 +215,11 @@ end
 function MKDefinition:__init(tbl)
    self.event_root = {}
    self.data_map = tbl.data_map
+   self.data_map_keys = {}
+   for k, v in pairs(self.data_map) do
+      table.insert(self.data_map_keys, k)
+   end
+   table.sort(self.data_map_keys)
    self.known_data_map = {}
    self.tool = renoise.tool()
    SynthDefinition.__init(self, tbl)
@@ -191,7 +234,7 @@ end
 function MKDefinition:receive_midi(message)
    if message[1] >= 0xC0 and message[1] <= 0xCF then
       -- program change
-      self.midi.midi_out_device:send({0xF0, 0x42, 0x30, 0x7e, 0x1c, 0xF7})
+      self:refresh_data()
    end
 end
 
@@ -200,7 +243,7 @@ function MKDefinition:refresh_data_callback()
    self.midi.midi_out_device:send({0xF0, 0x42, 0x30, 0x7e, 0x10, 0xF7})
 end
 
-function MKDefinition:refresh_data(message)
+function MKDefinition:refresh_data()
    if self.tool:has_timer({self, MKDefinition.refresh_data_callback}) then
       self.tool:remove_timer({self, MKDefinition.refresh_data_callback})
    end
@@ -242,16 +285,23 @@ function MKDefinition:receive_sysex(message)
             if item_values ~= nil then
                for j, x in ipairs(item_values) do
                   if x == vv then
-                     self.patch_document[param.id].value = j
+                     if param.value ~= j then
+                        param:set_value(j)
+                     end
                      break
                   end
                end
             else
                local rev = param.rev_value_callback
                if rev ~= nil then
-                  self.patch_document[param.id].value = rev(vv)
+                  local new_v = rev(vv)
+                  if param.value ~= new_v then
+                     param:set_value(new_v)
+                  end
                else
-                  self.patch_document[param.id].value = vv
+                  if param.value ~= vv then
+                     param:set_value(vv)
+                  end
                end
             end
          end
@@ -275,8 +325,10 @@ function MKDefinition:receive_sysex(message)
          end
       end
       if recognized then
+         self.is_loading = true
          local data = self:decode_data(message)
-         for i, v in pairs(self.data_map) do
+         for i, k in ipairs(self.data_map_keys) do
+            local v = self.data_map[k]
             if type(v) == "string" then
                if self.parameters[v] == nil then
                   print(("Bad parameter '%s'"):format(v))
@@ -284,28 +336,40 @@ function MKDefinition:receive_sysex(message)
                   if self.parameters[v].min_value < 0 then
                      print(("Not expecting a string for '%s'"):format(v))
                   end
-                  self.known_data_map[v] = true
+                  self.known_data_map[self.parameters[v].id] = true
                   local enabled = self.parameters[v].enabled
                   local ok = true
                   if enabled ~= nil then
                      ok = enabled
                   end
+                  if k == 0x11f then
+                     print("OK", ok)
+                  end
                   if ok then
                      local item_values = self.parameters[v].item_values
                      if item_values ~= nil then
+                        if k == 0x11f then
+                           print("OK", ok)
+                           print(v, self.parameters[v].value, data[k])
+                        end
                         for j, x in ipairs(item_values) do
-                           if x == data[i] then
-                              self.patch_document[v].value = j
+                           if x == data[k] then
+                              print(v, self.parameters[v].value, j)
+                              if self.parameters[v].value ~= j then
+                                 self.parameters[v]:set_value(j)
+                              end
                            break
                            end
                         end
                      else
-                        self.patch_document[v].value = data[i]
+                        if self.parameters[v].value ~= data[k] then
+                           self.parameters[v]:set_value(data[k])
+                        end
                      end
                   end
                end
             else
-               for k, w in ipairs(v(data[i], data)) do
+               for q, w in ipairs(v(data[k], data)) do
                   if self.parameters[w[1]] == nil then
                      print(("Bad parameter '%s'"):format(w[1]))
                   else
@@ -320,18 +384,23 @@ function MKDefinition:receive_sysex(message)
                         if item_values ~= nil then
                            for j, x in ipairs(item_values) do
                               if x == w[2] then
-                                 self.patch_document[w[1]].value = j
+                                 if self.parameters[w[1]].value ~= j then
+                                    self.parameters[w[1]]:set_value(j)
+                                 end
                                  break
                               end
                            end
                         else
-                           self.patch_document[w[1]].value = w[2]
+                           if self.parameters[w[1]].value ~= w[2] then
+                              self.parameters[w[1]]:set_value(w[2])
+                           end
                         end
                      end
                   end
                end
             end
          end
+         self.is_loading = false
          if learning then
             --print_dump(data)
             if self.old_data ~= nil then
@@ -429,10 +498,20 @@ function MKDefinition:init_midi()
 
    self.midi = MKMidi(midi_in_device, midi_out_device)
    self.midi:set_midi_channel(self.preferences.midi_out_channel.value)
+
+   local found = false
+   for i, v in ipairs(renoise.Midi.available_input_devices()) do
+      if self.midi.midi_in_device_name == v then
+         found = true
+      end
+   end
+   if not found then
+      self.midi.midi_in_device_name = renoise.Midi.available_input_devices()[1]
+   end
+
    self.midi_in_device = renoise.Midi.create_input_device(self.midi.midi_in_device_name,
                                                           {self, self.receive_midi},
                                                           {self, self.got_input})
-   self.midi.midi_out_device:send({0xF0, 0x42, 0x30, 0x7e, 0x10, 0xF7})
 end
 
 function range(from, to)
@@ -842,7 +921,7 @@ function get_timbre_sections(timbre)
                        items = {"off", "drive", "decimator", "hard clip", "oct saw", "multi tri",
                                 "multi sin", "sb psc saw", "sb psc tri", "sb psc sin",
                                 "lvl boost"},
-                       item_values = range(0, 11),
+                       item_values = range(0, 10),
                        number = 0x51,
                     },
                     Parameter {
@@ -986,8 +1065,8 @@ function get_timbre_sections(timbre)
                     Parameter {
                        name = "Key track",
                        id = "key_track",
-                       max_value = -63,
-                       min_value = 63,
+                       max_value = 63,
+                       min_value = -63,
                        default_value = 0,
                        number = 0x56,
                     },
@@ -1438,7 +1517,9 @@ local timbre_data_map = {
    [0x3d] = function (value)
       return {{"panpot", value - 64}}
    end,
-   [0x3e] = "key_track",
+   [0x3e] = function (value)
+      return {{"key_track", value - 0x40}}
+   end,
    [0x3f] = "punch_lvl",
 
    [0x41] = "eg1_attack",
@@ -1595,16 +1676,16 @@ local function get_fx_group(fx)
          items = fx_types,
          item_values = range(0, (#fx_types)-1),
          number = 0x01,
-         value_callback = function(p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
       Parameter {
          name = "Dry/Wet",
          id = "dry_wet",
          max_value = 0x64,
          number = 0x10,
+         notify_visibility = {"type"},
+         visibility = function (p)
+            return p.value ~= 1
+         end
       },
 
       Parameter {
@@ -2254,10 +2335,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x12,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
       
       Parameter {
@@ -2389,10 +2466,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x11,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -2565,10 +2638,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x11,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -2668,10 +2737,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x1a,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -2725,10 +2790,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x1f,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -2794,10 +2855,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x11,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -2933,10 +2990,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x11,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -3173,7 +3226,7 @@ local function get_fx_group(fx)
          max_value = 30,
          min_value = -30,
          default_value = 0,
-         number = 0x16,
+         number = 0x17,
       },      
 
       Parameter {
@@ -3234,10 +3287,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x15,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -3291,10 +3340,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x1a,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -3360,10 +3405,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x12,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -3417,10 +3458,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x17,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -3511,10 +3548,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x16,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -3568,10 +3601,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x1b,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -3636,10 +3665,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x12,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -3693,10 +3718,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x17,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -3745,10 +3766,6 @@ local function get_fx_group(fx)
          items = {"fixed", "note"},
          item_values = {0, 1},
          number = 0x11,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -3817,10 +3834,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x17,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -3874,10 +3887,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x1c,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -3925,10 +3934,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x11,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
       
       Parameter {
@@ -3987,10 +3992,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x16,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -4025,10 +4026,6 @@ local function get_fx_group(fx)
          items = {"off", "on"},
          item_values = {0, 1},
          number = 0x19,
-         value_callback = function (p)
-            p.synth_definition:refresh_data()
-            return p.value
-         end
       },
 
       Parameter {
@@ -4049,7 +4046,12 @@ local function get_fx_group(fx)
 end
 
 local fx_data_map = {
-   [0x11f] = "type",
+
+
+
+   [0x11f] = function (value)
+      return {{"type", value % 0x10}}
+   end,
    [0x121] = function (value)
       return {{"comp_ctrl_1", value},
               {"filter_ctrl_1", value},
@@ -4128,6 +4130,10 @@ local fx_data_map = {
               {"grain_sft_tm_ratio", value}}
    end,
    [0x126] = function (value)
+      local domin8or_workaround = value - 0x40
+      if domin8or_workaround < -18 or domin8or_workaround > 18 then
+         domin8or_workaround = -18
+      end
       return {{"comp_attack", value},
               {"filter_reso", value},
               {"bandeq_b1_freq", value},
@@ -4138,7 +4144,7 @@ local fx_data_map = {
               {"pan_delay_l_delay", value},
               {"mod_delay_l_delay", value},
               {"tape_echo_1_delay", value},
-              {"chorus_lfo_spread", value - 0x40},
+              {"chorus_lfo_spread", domin8or_workaround},
               {"flanger_feedback", value},
               {"phaser_mod_depth", value},
               {"vibrato_lfo_freq", value},
@@ -4150,7 +4156,7 @@ local fx_data_map = {
       return {{"comp_out_level", value},
               {"filter_trim", value},
               {"bandeq_b1_q", value},
-              {"distortion_pre_gain", value},
+              {"distortion_pre_gain", value - 0x40},
               {"decimator_bit", value},
               {"delay_l_delay", value},
               {"lcr_delay_c_delay", value},
@@ -4167,7 +4173,7 @@ local fx_data_map = {
    end,
    [0x128] = function (value)
       return {{"filter_mod_src", value},
-              {"bandeq_b1_gain", value},
+              {"bandeq_b1_gain", value - 0x40},
               {"distortion_b1_freq", value},
               {"decimator_out_level", value},
               {"delay_r_delay", value},
@@ -4184,7 +4190,7 @@ local fx_data_map = {
               {"grain_sft_duration_sync", value}}
    end,
    [0x129] = function (value)
-      return {{"filter_mod_int", value},
+      return {{"filter_mod_int", value - 0x40},
               {"bandeq_b2_freq", value},
               {"distortion_b1_q", value},
               {"decimator_fs_mod_int", value - 0x40},
@@ -4220,7 +4226,7 @@ local fx_data_map = {
    end,
    [0x12b] = function (value)
       return {{"filter_lfo_sync", value},
-              {"bandeq_b2_gain", value},
+              {"bandeq_b2_gain", value - 0x40},
               {"decimator_lfo_freq", value},
               {"delay_r_delay_sync", value},
               {"lcr_delay_c_delay_sync", value},
@@ -4266,7 +4272,7 @@ local fx_data_map = {
    end,
    [0x12e] = function (value)
       return {{"filter_lfo_wave", value},
-              {"bandeq_b3_gain", value},
+              {"bandeq_b3_gain", value - 0x40},
               {"decimator_lfo_shape", value - 0x40},
               {"delay_trim", value},
               {"lcr_delay_c_level", value},
@@ -4309,7 +4315,7 @@ local fx_data_map = {
               {"ring_mod_pre_lpf", value}}
    end,
    [0x132] = function (value)
-      return {{"bandeq_b3_gain", value},
+      return {{"bandeq_b3_gain", value - 0x40},
               {"lcr_delay_spread", value},
               {"pan_delay_key_sync", value},
               {"tape_echo_wow_freq", value}}
@@ -4616,7 +4622,7 @@ local def = {
                             [0x0e] = "t2_midi_ch",
                             [0x0f] = "split_key",
                             [0x10] = function (value)
-                               return {{"octave", math.floor(value/0x10) - 0x9}}
+                               return {{"octave", math.floor(value/0x10) - 0x8}}
                             end,
                             [0x11] = "assign1",
                             [0x12] = "assign2",
