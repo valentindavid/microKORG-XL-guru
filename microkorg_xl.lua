@@ -1206,6 +1206,10 @@ function get_timbre_sections(timbre)
                        number = 0x84,
                     },
                  },
+              },
+              Section {
+                 name = ("Timbre %d patches"):format(timbre),
+                 sysex_message_template = {0xF0, 0x42, 0x30, 0x7e, 0x41, 0x02 + timbre*0x10, 0x00, "lnn", "hnn", "lvv", "hvv", 0xF7},
                  Group {
                     name = "LFO1",
                     Parameter {
@@ -1230,11 +1234,25 @@ function get_timbre_sections(timbre)
                        number = 0x93,
                     },
                     Parameter {
+                       name = "Freq",
+                       id = "lfo1_sync_freq",
+                       max_value = 127,
+                       number = 0x92,
+                       notify_visibility = {"lfo1_bpm_sync"},
+                       visibility = function (p)
+                          return p.value == 1
+                       end
+                    },
+                    Parameter {
                        name = "Sync note",
                        id = "lfo1_sync_note",
                        items = sync_notes,
                        item_values = range(0, (#sync_notes)-1),
                        number = 0x96,
+                       notify_visibility = {"lfo1_bpm_sync"},
+                       visibility = function (p)
+                          return p.value == 2
+                       end
                     },
                  },
                  Group {
@@ -1261,17 +1279,27 @@ function get_timbre_sections(timbre)
                        number = 0xa3,
                     },
                     Parameter {
+                       name = "Freq",
+                       id = "lfo2_sync_freq",
+                       max_value = 127,
+                       number = 0xa2,
+                       notify_visibility = {"lfo2_bpm_sync"},
+                       visibility = function (p)
+                          return p.value == 1
+                       end
+                    },
+                    Parameter {
                        name = "Sync note",
                        id = "lfo2_sync_note",
                        items = sync_notes,
                        item_values = range(0, (#sync_notes)-1),
                        number = 0xa6,
+                       notify_visibility = {"lfo2_bpm_sync"},
+                       visibility = function (p)
+                          return p.value == 2
+                       end
                     },
                  },
-              },
-              Section {
-                 name = ("Timbre %d patches"):format(timbre),
-                 sysex_message_template = {0xF0, 0x42, 0x30, 0x7e, 0x41, 0x02 + timbre*0x10, 0x00, "lnn", "hnn", "lvv", "hvv", 0xF7},
                  Group {
                     name = "Patch 1",
                     Parameter {
@@ -1549,12 +1577,14 @@ local timbre_data_map = {
       return {{"eg3_vel_int", value - 0x40}}
    end,
    [0x53] = "lfo1_wave",
+   [0x54] = "lfo1_sync_freq",
    [0x55] = function (value)
       return {{"lfo1_key_sync", math.floor(value/0x20)%4},
               {"lfo1_bpm_sync", math.floor(value/0x80)}}
    end,
    [0x56] = "lfo1_sync_note",               
    [0x57] = "lfo2_wave",
+   [0x58] = "lfo2_sync_freq",
    [0x59] = function (value)
       return {{"lfo2_key_sync", math.floor(value/0x20)%4},
               {"lfo2_bpm_sync", math.floor(value/0x80)}}
