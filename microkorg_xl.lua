@@ -90,7 +90,6 @@ local function Parameter(tbl)
    end
 
    p.set_value = function (self, value)
-      print("set_value", self.id)
       local ret = old_Parameter.set_value(self, value)
       self:refresh()
       return ret
@@ -342,19 +341,11 @@ function MKDefinition:receive_sysex(message)
                   if enabled ~= nil then
                      ok = enabled
                   end
-                  if k == 0x11f then
-                     print("OK", ok)
-                  end
                   if ok then
                      local item_values = self.parameters[v].item_values
                      if item_values ~= nil then
-                        if k == 0x11f then
-                           print("OK", ok)
-                           print(v, self.parameters[v].value, data[k])
-                        end
                         for j, x in ipairs(item_values) do
                            if x == data[k] then
-                              print(v, self.parameters[v].value, j)
                               if self.parameters[v].value ~= j then
                                  self.parameters[v]:set_value(j)
                               end
@@ -579,7 +570,8 @@ function get_timbre_sections(timbre)
                        name = "Assign",
                        id = "assign_voice",
                        items = {"mono 1", "mono 2", "poly"},
-                       item_values = range(0, 3),
+                       item_values = range(0, 2),
+                       default_value = 3,
                        number = 0x0b,
                     },
                  },
@@ -591,7 +583,7 @@ function get_timbre_sections(timbre)
                        id = "unisson_mode",
                        number = 0x08,
                        items = {"off", "2 voice", "3 voice", "4 voice"},
-                       item_values = range(0, 4),
+                       item_values = range(0, 3),
                     },
                     Parameter {
                        name = "Detune",
@@ -638,7 +630,7 @@ function get_timbre_sections(timbre)
                        number = 0x16,
                        min_value = -63,
                        max_value = 63,
-                       default_value = 0,
+                       default_value = 10,
                     },
                     Parameter {
                        name = "P bend",
@@ -646,7 +638,7 @@ function get_timbre_sections(timbre)
                        number = 0x10,
                        min_value = -12,
                        max_value = 12,
-                       defaultr_value = 0,
+                       default_value = 2,
                     },
                     Parameter {
                        name = "Portamento",
@@ -892,6 +884,7 @@ function get_timbre_sections(timbre)
                        name = "Osc1",
                        id = "osc1_lvl",
                        max_value = 127,
+                       default_value = 127,
                        number = 0x28,
                     },
                     Parameter {
@@ -960,6 +953,7 @@ function get_timbre_sections(timbre)
                        name = "Type",
                        id = "filt1_type",
                        max_value = 127,
+                       default_value = 127,
                        number = 0x31,
                     },
                     Parameter {
@@ -1046,6 +1040,7 @@ function get_timbre_sections(timbre)
                        name = "Level",
                        id = "level",
                        max_value = 127,
+                       default_value = 127,
                        number = 0x50,
                     },
                     Parameter {
@@ -1085,6 +1080,7 @@ function get_timbre_sections(timbre)
                        id = "eq_low_gain",
                        min_value = -30,
                        max_value = 30,
+                       default_value = 0,
                        number = 0x01,
                     },
                     Parameter {
@@ -1098,6 +1094,7 @@ function get_timbre_sections(timbre)
                        id = "eq_high_gain",
                        min_value = -30,
                        max_value = 30,
+                       default_value = 0,
                        number = 0x03,
                     },
                  },
@@ -1113,6 +1110,7 @@ function get_timbre_sections(timbre)
                        name = "Decay",
                        id = "eg1_decay",
                        max_value = 127,
+                       default_value = 127,
                        number = 0x61,
                     },
                     Parameter {
@@ -1132,6 +1130,7 @@ function get_timbre_sections(timbre)
                        id = "eg1_vel_int",
                        max_value = 63,
                        min_value = -63,
+                       default_value = 0,
                        number = 0x64,
                     },
                  },
@@ -1147,6 +1146,7 @@ function get_timbre_sections(timbre)
                        name = "Decay",
                        id = "eg2_decay",
                        max_value = 127,
+                       default_value = 127,
                        number = 0x71,
                     },
                     Parameter {
@@ -1166,6 +1166,7 @@ function get_timbre_sections(timbre)
                        id = "eg2_vel_int",
                        max_value = 63,
                        min_value = -63,
+                       default_value = 0,
                        number = 0x74,
                     },
                  },
@@ -1181,6 +1182,7 @@ function get_timbre_sections(timbre)
                        name = "Decay",
                        id = "eg3_decay",
                        max_value = 127,
+                       default_value = 127,
                        number = 0x81,
                     },
                     Parameter {
@@ -1200,6 +1202,7 @@ function get_timbre_sections(timbre)
                        id = "eg3_vel_int",
                        max_value = 63,
                        min_value = -63,
+                       default_value = 0,
                        number = 0x84,
                     },
                  },
@@ -4381,6 +4384,7 @@ local all_section = Section {
          id = "split_key",
          max_value = 127,
          min_value = 0,
+         default_value = 63,
          number = 0x1b,
       },
       Parameter {
@@ -4500,12 +4504,14 @@ local all_section = Section {
          id = "arp_last_step",
          items = {"1", "2", "3", "4", "5", "6", "7", "8"},
          item_values = range(0, 7),
+         default_value = 8,
          number = 0x03,
       },
       Parameter {
          name = "Gate time",
          id = "arp_gate_time",
          max_value = 100,
+         default_value = 50,
          number = 0x04,
       },
       Parameter {
@@ -4513,6 +4519,7 @@ local all_section = Section {
          id = "arp_swing",
          max_value = 50,
          min_value = -50,
+         default_value = 0,
          number = 0x05,
       },
       Parameter {
@@ -4520,6 +4527,7 @@ local all_section = Section {
          id = "arp_resolution",
          items = {"1/32", "1/24", "1/16", "1/12", "1/8", "1/6", "1/4", "1/2", "1/1"},
          item_values = range(0, 8),
+         default_value = 7,
          number = 0x01,
       },
       Parameter {
@@ -4530,13 +4538,6 @@ local all_section = Section {
          item_values = {0, 1},
          number = 0x02,
       },
-      Parameter {
-         name = "Note 1",
-         id = "arp_note",
-         items = {"off", "on"},
-         item_values = {0, 1},
-         number = 0x10,
-      },
    },
    Group {
       name = "Arp notes",
@@ -4546,6 +4547,7 @@ local all_section = Section {
          id = "arp_note_1",
          items = {"off", "on"},
          item_values = {0, 1},
+         default_value = 2,
          number = 0x10,
       },
       Parameter {
@@ -4553,6 +4555,7 @@ local all_section = Section {
          id = "arp_note_2",
          items = {"off", "on"},
          item_values = {0, 1},
+         default_value = 2,
          number = 0x11,
       },
       Parameter {
@@ -4560,6 +4563,7 @@ local all_section = Section {
          id = "arp_note_3",
          items = {"off", "on"},
          item_values = {0, 1},
+         default_value = 2,
          number = 0x12,
       },
       Parameter {
@@ -4567,6 +4571,7 @@ local all_section = Section {
          id = "arp_note_4",
          items = {"off", "on"},
          item_values = {0, 1},
+         default_value = 2,
          number = 0x13,
       },
       Parameter {
@@ -4574,6 +4579,7 @@ local all_section = Section {
          id = "arp_note_5",
          items = {"off", "on"},
          item_values = {0, 1},
+         default_value = 2,
          number = 0x14,
       },
       Parameter {
@@ -4581,6 +4587,7 @@ local all_section = Section {
          id = "arp_note_6",
          items = {"off", "on"},
          item_values = {0, 1},
+         default_value = 2,
          number = 0x15,
       },
       Parameter {
@@ -4588,6 +4595,7 @@ local all_section = Section {
          id = "arp_note_7",
          items = {"off", "on"},
          item_values = {0, 1},
+         default_value = 2,
          number = 0x16,
       },
       Parameter {
@@ -4595,6 +4603,7 @@ local all_section = Section {
          id = "arp_note_8",
          items = {"off", "on"},
          item_values = {0, 1},
+         default_value = 2,
          number = 0x17,
       },
    }
